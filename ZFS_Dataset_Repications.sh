@@ -351,6 +351,13 @@ zfs_replication() {
 
       # calc which syncoid flags to use, based on syncoid_mode
       local -a syncoid_flags=("-r")
+      # Check if the source dataset is encrypted
+      encryption_status=$(zfs get -H -o value encryption ${source_path})
+      # If the dataset is encrypted, set sendoptions to -w
+      if [ "${encryption_status}" != "off" ]; then
+          syncoid_flags+=("--sendoptions=-w")
+      fi
+      
       case "${syncoid_mode}" in
         "strict-mirror")
           syncoid_flags+=("--delete-target-snapshots" "--force-delete")
