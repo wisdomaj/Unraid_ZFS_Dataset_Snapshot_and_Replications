@@ -18,8 +18,9 @@ notify_tune="yes"  # as well as a notifiction, if sucessful it will play the Mar
 ####################
 # Source for snapshotting and/or replication
 source_pool="source_zfs_pool_name"  #this is the zpool in which your source dataset resides (note the does NOT start with /mnt/)
-source_dataset="dataset_name"   #this is the name of the dataset you want to snapshot and/or replicate
+source_datasets="dataset_name"   #this is the name of the dataset you want to snapshot and/or replicate
                                 #If using auto snapshots souce pool CAN NOT contain spaces. This is because sanoid config doesnt handle them
+valid_source_datasets=() # this is the list of datasets that will be snapshotted and replicated if the pre_run_checks function validates each dataset successfully
 #
 ####################
 #
@@ -64,11 +65,7 @@ rsync_type="incremental" # set to "incremental" for dated incremental backups or
 ####################################################################################################
 #
 #Advanced variables you do not need to change these.
-source_path="$source_pool"/"$source_dataset"
-zfs_destination_path="$destination_pool"/"$parent_destination_dataset"/"$source_pool"_"$source_dataset"
-destination_rsync_location="$parent_destination_folder"/"$source_pool"_"$source_dataset"
 sanoid_config_dir="/mnt/user/system/sanoid/"
-sanoid_config_complete_path="$sanoid_config_dir""$source_pool"_"$source_dataset"/
 #
 ####################
 #
@@ -143,29 +140,39 @@ pre_run_checks() {
   fi
   #
   # check if the dataset and pool exist
-  if ! zfs list -H "${source_path}" &>/dev/null; then
-    msg="Error: The source dataset '${source_dataset}' does not exist."
-    echo "$msg"
-    unraid_notify "$msg" "failure"
-    exit 1
-  fi
-  #
-  # check if autosnapshots is set to "yes" and source_dataset has a space in its name
-  if [[ "${autosnapshots}" == "yes" && "${source_dataset}" == *" "* ]]; then
-    msg="Error: Autosnapshots is enabled and the source dataset name '${source_dataset}' contains spaces. Rename the dataset without spaces and try again. This is because although ZFS does support spaces in dataset names sanoid config file doesnt parse them correctly"
-    echo "$msg"
-    unraid_notify "$msg" "failure"
-    exit 1
-  fi
-  #
-  local used
-  used=$(zfs get -H -o value used "${source_path}")
-  if [[ ${used} == 0B ]]; then
-    msg="The source dataset '${source_path}' is empty. Nothing to replicate."
-    echo "$msg"
-    unraid_notify "$msg" "failure"
-    exit 1
-  fi
+  for source_dataset in "${source_datasets[@]}"; do
+    local source_path="${source_pool}/${source_dataset}"
+    local dataset_valid=true  # Assume the dataset is valid until a check fails
+
+    if ! zfs list -H "${source_path}" &>/dev/null; then
+      msg="Error: The source dataset '${source_dataset}' does not exist."
+      echo "$msg"
+      unraid_notify "$msg" "failure"
+      dataset_valid=false
+    fi
+    #
+    # check if autosnapshots is set to "yes" and source_dataset has a space in its name
+    if [[ "${autosnapshots}" == "yes" && "${source_dataset}" == *" "* ]]; then
+      msg="Error: Autosnapshots is enabled and the source dataset name '${source_dataset}' contains spaces. Rename the dataset without spaces and try again. This is because although ZFS does support spaces in dataset names sanoid config file doesnt parse them correctly"
+      echo "$msg"
+      unraid_notify "$msg" "failure"
+      dataset_valid=false
+    fi
+    #
+    local used
+    used=$(zfs get -H -o value used "${source_path}")
+    if [[ ${used} == 0B ]]; then
+      msg="The source dataset '${source_path}' is empty. Nothing to replicate."
+      echo "$msg"
+      unraid_notify "$msg" "failure"
+      dataset_valid=false
+    fi
+
+    # If all checks pass for this dataset, add it to the valid_source_datasets array
+    if [[ "$dataset_valid" == true ]]; then
+      valid_source_datasets+=("${source_dataset}")
+    fi
+  done
   #
   if [ "$destination_remote" = "yes" ]; then
     echo "Replication target is a remote server. I will check it is available..."
@@ -238,35 +245,36 @@ create_sanoid_config() {
   if [ "${autosnapshots}" != "yes" ]; then
     return
   fi
-  #
-  # check if the configuration directory exists, if not create it
-  if [ ! -d "${sanoid_config_complete_path}" ]; then
-    mkdir -p "${sanoid_config_complete_path}"
-  fi
-  #
-  # check if the sanoid.defaults.conf file exists in the configuration directory, if not copy it from the default location
-  if [ ! -f "${sanoid_config_complete_path}sanoid.defaults.conf" ]; then
-    cp /etc/sanoid/sanoid.defaults.conf "${sanoid_config_complete_path}sanoid.defaults.conf"
-  fi
-  #
-  # check if a configuration file has already been created from a previous run, if so exit the function
-  if [ -f "${sanoid_config_complete_path}sanoid.conf" ]; then
-    return
-  fi
-#
-# this  creates the new configuration file based off variables for retention
-  echo "[${source_path}]" > "${sanoid_config_complete_path}sanoid.conf"
-  echo "use_template = production" >> "${sanoid_config_complete_path}sanoid.conf"
-  echo "recursive = yes" >> "${sanoid_config_complete_path}sanoid.conf"
-  echo "" >> "${sanoid_config_complete_path}sanoid.conf"
-  echo "[template_production]" >> "${sanoid_config_complete_path}sanoid.conf"
-  echo "hourly = ${snapshot_hours}" >> "${sanoid_config_complete_path}sanoid.conf"
-  echo "daily = ${snapshot_days}" >> "${sanoid_config_complete_path}sanoid.conf"
-  echo "weekly = ${snapshot_weeks}" >> "${sanoid_config_complete_path}sanoid.conf"
-  echo "monthly = ${snapshot_months}" >> "${sanoid_config_complete_path}sanoid.conf"
-  echo "yearly = ${snapshot_years}" >> "${sanoid_config_complete_path}sanoid.conf"
-  echo "autosnap = yes" >> "${sanoid_config_complete_path}sanoid.conf"
-  echo "autoprune = yes" >> "${sanoid_config_complete_path}sanoid.conf"
+  for source_dataset in "${valid_source_datasets[@]}"; do
+    local source_path="${source_pool}/${source_dataset}"
+    local sanoid_config_complete_path="${sanoid_config_dir}${source_pool}_${source_dataset}/"
+    #
+    # check if the configuration directory exists, if not create it
+    if [ ! -d "${sanoid_config_complete_path}" ]; then
+      mkdir -p "${sanoid_config_complete_path}"
+    fi
+    #
+    # check if the sanoid.defaults.conf file exists in the configuration directory, if not copy it from the default location
+    if [ ! -f "${sanoid_config_complete_path}sanoid.defaults.conf" ]; then
+      cp /etc/sanoid/sanoid.defaults.conf "${sanoid_config_complete_path}sanoid.defaults.conf"
+    fi
+    #
+    # this  creates the new configuration file based off variables for retention
+    if [ ! -f "${sanoid_config_complete_path}sanoid.conf" ]; then
+      echo "[${source_path}]" > "${sanoid_config_complete_path}sanoid.conf"
+      echo "use_template = production" >> "${sanoid_config_complete_path}sanoid.conf"
+      echo "recursive = yes" >> "${sanoid_config_complete_path}sanoid.conf"
+      echo "" >> "${sanoid_config_complete_path}sanoid.conf"
+      echo "[template_production]" >> "${sanoid_config_complete_path}sanoid.conf"
+      echo "hourly = ${snapshot_hours}" >> "${sanoid_config_complete_path}sanoid.conf"
+      echo "daily = ${snapshot_days}" >> "${sanoid_config_complete_path}sanoid.conf"
+      echo "weekly = ${snapshot_weeks}" >> "${sanoid_config_complete_path}sanoid.conf"
+      echo "monthly = ${snapshot_months}" >> "${sanoid_config_complete_path}sanoid.conf"
+      echo "yearly = ${snapshot_years}" >> "${sanoid_config_complete_path}sanoid.conf"
+      echo "autosnap = yes" >> "${sanoid_config_complete_path}sanoid.conf"
+      echo "autoprune = yes" >> "${sanoid_config_complete_path}sanoid.conf"
+    fi
+  done
 }
 #
 ####################
@@ -275,18 +283,18 @@ create_sanoid_config() {
 autosnap() {
   # check if autosnapshots is set to "yes" before creating snapshots
   if [[ "${autosnapshots}" == "yes" ]]; then
-    # Create the snapshots on the source directory using Sanoid if required
-    echo "creating the automatic snapshots using sanoid based off retention policy"
-    /usr/local/sbin/sanoid --configdir="${sanoid_config_complete_path}" --take-snapshots
-    #
-    # check the exit status of the sanoid command 
-    if [ $? -eq 0 ]; then
-      tune="2"
-      unraid_notify "Automatic snapshot creation using Sanoid was successful for source: ${source_path}" "success"
-    else
-      unraid_notify "Automatic snapshot creation using Sanoid failed for source: ${source_path}" "failure"
-    fi
-  #
+    for source_dataset in "${valid_source_datasets[@]}"; do
+      local source_path="${source_pool}/${source_dataset}"
+      local sanoid_config_complete_path="${sanoid_config_dir}${source_pool}_${source_dataset}/"
+      echo "Creating automatic snapshots for ${source_path}"
+      /usr/local/sbin/sanoid --configdir="${sanoid_config_complete_path}" --take-snapshots
+      if [ $? -eq 0 ]; then
+        tune="2"
+        unraid_notify "Automatic snapshot creation using Sanoid was successful for source: ${source_path}" "success"
+      else
+        unraid_notify "Automatic snapshot creation using Sanoid failed for source: ${source_path}" "failure"
+      fi
+    done
   else
     echo "Autosnapshots are not set to 'yes', skipping..."
   fi
@@ -296,11 +304,14 @@ autosnap() {
 #
 # This fuction will autoprune the source dataset using sanoid
 autoprune() {
-  # rheck if autosnapshots is set to "yes" before creating snapshots
+  # check if autosnapshots is set to "yes" before creating snapshots
   if [[ "${autosnapshots}" == "yes" ]]; then
-   echo "pruning the automatic snapshots using sanoid based off retention policy"
-# run Sanoid to prune snapshots based on retention policy
-/usr/local/sbin/sanoid --configdir="${sanoid_config_complete_path}" --prune-snapshots
+    for source_dataset in "${valid_source_datasets[@]}"; do
+      local source_path="${source_pool}/${source_dataset}"
+      local sanoid_config_complete_path="${sanoid_config_dir}${source_pool}_${source_dataset}/"
+      echo "Pruning automatic snapshots for ${source_path}"
+      /usr/local/sbin/sanoid --configdir="${sanoid_config_complete_path}" --prune-snapshots
+    done
   else
     echo "Autosnapshots are not set to 'yes', skipping..."
   fi
@@ -310,56 +321,62 @@ autoprune() {
 #
 # This function  does the zfs replication
 zfs_replication() {
-  # Check if replication method is set to ZFS
+    # Check if replication method is set to ZFS
   if [ "$replication" = "zfs" ]; then
-    # Check if the destination location was set to remote
-    if [ "$destination_remote" = "yes" ]; then
-      destination="${remote_user}@${remote_server}:${zfs_destination_path}"
-      # check if the parent destination ZFS dataset exists on the remote server. If not, create it.
-      ssh "${remote_user}@${remote_server}" "if ! zfs list -o name -H '${destination_pool}/${parent_destination_dataset}' &>/dev/null; then zfs create '${destination_pool}/${parent_destination_dataset}'; fi"
-      if [ $? -ne 0 ]; then
-        unraid_notify "Failed to check or create ZFS dataset on remote server: ${destination}" "failure"
-        return 1
-      fi
-    else
-      destination="${zfs_destination_path}"
-      # check if the parent destination ZFS dataset exists locally. If not, create it.
-      if ! zfs list -o name -H "${destination_pool}/${parent_destination_dataset}" &>/dev/null; then
-        zfs create "${destination_pool}/${parent_destination_dataset}"
+    for source_dataset in "${valid_source_datasets[@]}"; do
+      local source_path="${source_pool}/${source_dataset}"
+      local zfs_destination_path="${destination_pool}/${destination_dataset}/${source_dataset}"
+
+      # Check if the destination location was set to remote
+      if [ "$destination_remote" = "yes" ]; then
+        local destination="${remote_user}@${remote_server}:${zfs_destination_path}"
+        # check if the parent destination ZFS dataset exists on the remote server. If not, create it.
+        ssh "${remote_user}@${remote_server}" "if ! zfs list -o name -H '${destination_pool}/${destination_dataset}' &>/dev/null; then zfs create '${destination_pool}/${destination_dataset}'; fi"
         if [ $? -ne 0 ]; then
-          unraid_notify "Failed to check or create local ZFS dataset: ${destination_pool}/${parent_destination_dataset}" "failure"
-          return 1
+          unraid_notify "Failed to check or create ZFS dataset on remote server: ${destination}" "failure"
+          continue
+        fi
+      else
+        local destination="${zfs_destination_path}"
+        # check if the parent destination ZFS dataset exists locally. If not, create it.
+        if ! zfs list -o name -H "${destination_pool}/${destination_dataset}" &>/dev/null; then
+          zfs create "${destination_pool}/${destination_dataset}"
+          if [ $? -ne 0 ]; then
+            unraid_notify "Failed to check or create local ZFS dataset: ${destination_pool}/${destination_dataset}" "failure"
+            continue
+          fi
         fi
       fi
-    fi
-    # calc which syncoid flags to use, based on syncoid_mode
-    local -a syncoid_flags=("-r")
-    case "${syncoid_mode}" in
-      "strict-mirror")
-       syncoid_flags+=("--delete-target-snapshots" "--force-delete")
-        ;;
-      "basic")
-        # No additional flags other than -r
-        ;;
-      *)
-        echo "Invalid syncoid_mode. Please set it to 'strict-mirror', or 'basic'."
-        exit 1
-        ;;
-    esac
-    #
-    # Use syncoid to replicate snapshot to the destination dataset
-    echo "Starting ZFS replication using syncoid with mode: ${syncoid_mode}"
-    /usr/local/sbin/syncoid "${syncoid_flags[@]}" "${source_path}" "${destination}"
-    if [ $? -eq 0 ]; then
-      if [ "$destination_remote" = "yes" ]; then
-        unraid_notify "ZFS replication was successful from source: ${source_path} to remote destination: ${destination}" "success"
+
+      # calc which syncoid flags to use, based on syncoid_mode
+      local -a syncoid_flags=("-r")
+      case "${syncoid_mode}" in
+        "strict-mirror")
+          syncoid_flags+=("--delete-target-snapshots" "--force-delete")
+          ;;
+        "basic")
+          # No additional flags other than -r
+          ;;
+        *)
+          echo "Invalid syncoid_mode. Please set it to 'strict-mirror' or 'basic'."
+          exit 1
+          ;;
+      esac
+
+      # Use syncoid to replicate snapshot to the destination dataset
+      echo "Starting ZFS replication using syncoid with mode: ${syncoid_mode}"
+      /usr/local/sbin/syncoid "${syncoid_flags[@]}" "${source_path}" "${destination}"
+
+      if [ $? -eq 0 ]; then
+        if [ "$destination_remote" = "yes" ]; then
+          unraid_notify "ZFS replication was successful from source: ${source_path} to remote destination: ${destination}" "success"
+        else
+          unraid_notify "ZFS replication was successful from source: ${source_path} to local destination: ${destination}" "success"
+        fi
       else
-        unraid_notify "ZFS replication was successful from source: ${source_path} to local destination: ${destination}" "success"
+        unraid_notify "ZFS replication failed from source: ${source_path} to destination: ${destination}" "failure"
       fi
-    else
-      unraid_notify "ZFS replication failed from source: ${source_path} to ${destination}" "failure"
-      return 1
-    fi
+    done
   else
     echo "ZFS replication not set. Skipping ZFS replication."
   fi
