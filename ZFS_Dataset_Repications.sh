@@ -339,7 +339,7 @@ zfs_replication() {
       else
         local destination="${zfs_destination_path}"
         # check if the parent destination ZFS dataset exists locally. If not, create it.
-        if ! zfs list -o name -H "${destination_pool}/${destination_dataset}" &>/dev/null; then
+        if ! zfs list -o name -H "${destination_pool}/${parent_destination_dataset}" &>/dev/null; then
           zfs create "${destination_pool}/${parent_destination_dataset}"
           if [ $? -ne 0 ]; then
             unraid_notify "Failed to check or create local ZFS dataset: ${destination_pool}/${parent_destination_dataset}" "failure"
