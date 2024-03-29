@@ -353,9 +353,12 @@ zfs_replication() {
       local -a syncoid_flags=("-r")
       # Check if the source dataset is encrypted
       encryption_status=$(zfs get -H -o value encryption ${source_path})
-      # If the dataset is encrypted, set sendoptions to -w
+      # If the dataset is encrypted, send dataset as raw and preserve properties
       if [ "${encryption_status}" != "off" ]; then
-          syncoid_flags+=("--sendoptions=-w")
+        syncoid_flags+=("--sendoptions=-pw")
+      else
+        # preserve properties
+        syncoid_flags+=("--sendoptions=-p")
       fi
       
       case "${syncoid_mode}" in
