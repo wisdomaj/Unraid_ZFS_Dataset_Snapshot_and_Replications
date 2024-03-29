@@ -141,7 +141,7 @@ pre_run_checks() {
   #
   # check if the dataset and pool exist
   for source_dataset in "${source_datasets[@]}"; do
-    local source_path="${source_pool}/${source_dataset}"
+    local source_path="$source_pool"/"$source_dataset"
     local dataset_valid=true  # Assume the dataset is valid until a check fails
 
     if ! zfs list -H "${source_path}" &>/dev/null; then
@@ -246,8 +246,8 @@ create_sanoid_config() {
     return
   fi
   for source_dataset in "${valid_source_datasets[@]}"; do
-    local source_path="${source_pool}/${source_dataset}"
-    local sanoid_config_complete_path="${sanoid_config_dir}${source_pool}_${source_dataset}/"
+    local source_path="$source_pool"/"$source_dataset"
+    local sanoid_config_complete_path="$sanoid_config_dir""$source_pool"_"$source_dataset"/
     #
     # check if the configuration directory exists, if not create it
     if [ ! -d "${sanoid_config_complete_path}" ]; then
@@ -284,8 +284,8 @@ autosnap() {
   # check if autosnapshots is set to "yes" before creating snapshots
   if [[ "${autosnapshots}" == "yes" ]]; then
     for source_dataset in "${valid_source_datasets[@]}"; do
-      local source_path="${source_pool}/${source_dataset}"
-      local sanoid_config_complete_path="${sanoid_config_dir}${source_pool}_${source_dataset}/"
+      local source_path="$source_pool"/"$source_dataset"
+      local sanoid_config_complete_path="$sanoid_config_dir""$source_pool"_"$source_dataset"/
       echo "Creating automatic snapshots for ${source_path}"
       /usr/local/sbin/sanoid --configdir="${sanoid_config_complete_path}" --take-snapshots
       if [ $? -eq 0 ]; then
@@ -308,7 +308,7 @@ autoprune() {
   if [[ "${autosnapshots}" == "yes" ]]; then
     for source_dataset in "${valid_source_datasets[@]}"; do
       local source_path="${source_pool}/${source_dataset}"
-      local sanoid_config_complete_path="${sanoid_config_dir}${source_pool}_${source_dataset}/"
+      local sanoid_config_complete_path="$sanoid_config_dir""$source_pool"_"$source_dataset"/
       echo "Pruning automatic snapshots for ${source_path}"
       /usr/local/sbin/sanoid --configdir="${sanoid_config_complete_path}" --prune-snapshots
     done
@@ -324,7 +324,7 @@ zfs_replication() {
     # Check if replication method is set to ZFS
   if [ "$replication" = "zfs" ]; then
     for source_dataset in "${valid_source_datasets[@]}"; do
-      local source_path="${source_pool}/${source_dataset}"
+      local source_path="$source_pool"/"$source_dataset"
       local zfs_destination_path="$destination_pool"/"$parent_destination_dataset"/"$source_pool"_"$source_dataset"
 
       # Check if the destination location was set to remote
