@@ -389,6 +389,7 @@ zfs_replication() {
 # Gets the most recent backup to compare against (used by below funcrions)
 get_previous_backup() {
     if [ "$rsync_type" = "incremental" ]; then
+      local destination_rsync_location="${parent_destination_folder}/${source_pool}_${source_dataset}"
         if [ "$destination_remote" = "yes" ]; then
             echo "Running: ssh ${remote_user}@${remote_server} \"ls ${destination_rsync_location} | sort -r | head -n 2 | tail -n 1\""
             previous_backup=$(ssh "${remote_user}@${remote_server}" "ls \"${destination_rsync_location}\" | sort -r | head -n 2 | tail -n 1")
@@ -404,79 +405,79 @@ rsync_replication() {
     IFS=$'\n'
     if [ "$replication" = "rsync" ]; then
         local snapshot_name="rsync_snapshot"
-        if [ "$rsync_type" = "incremental" ]; then
-            backup_date=$(date +%Y-%m-%d_%H:%M)
-            destination="${destination_rsync_location}/${backup_date}"
-        else
-            destination="${destination_rsync_location}"
-        fi
-        #
-        do_rsync() {
-            local snapshot_mount_point="$1"
-            local rsync_destination="$2"
-            local relative_dataset_path="$3"
-            get_previous_backup
-            local link_dest_path="${destination_rsync_location}/${previous_backup}${relative_dataset_path}"
-            [ -z "$previous_backup" ] && local link_dest="" || local link_dest="--link-dest=${link_dest_path}"
-            echo "Link dest value is: $link_dest"
-            # Log the link_dest value for debugging
-            echo "Link dest value is: $link_dest"
-            #
-            if [ "$destination_remote" = "yes" ]; then
-                # Create the remote directory 
-                [ "$rsync_type" = "incremental" ] && ssh "${remote_user}@${remote_server}" "mkdir -p \"${rsync_destination}\""
-                # Rsync the snapshot to the remote destination with link-dest
-                #rsync -azvvv --delete $link_dest -e ssh "${snapshot_mount_point}/" "${remote_user}@${remote_server}:${rsync_destination}/"
-                echo "Executing remote rsync: rsync -azvh --delete $link_dest -e ssh \"${snapshot_mount_point}/\" \"${remote_user}@${remote_server}:${rsync_destination}/\""
-rsync -azvh --delete $link_dest -e ssh "${snapshot_mount_point}/" "${remote_user}@${remote_server}:${rsync_destination}/"
+        for source_dataset in "${valid_source_datasets[@]}"; do
+            local source_path="${source_pool}/${source_dataset}"
+            local destination_rsync_location="${parent_destination_folder}/${source_pool}_${source_dataset}"
 
-                if [ $? -ne 0 ]; then
-                    unraid_notify "Rsync replication failed from source: ${source_path} to remote destination: ${remote_user}@${remote_server}:${rsync_destination}" "failure"
-                    return 1
-                fi
+            if [ "$rsync_type" = "incremental" ]; then
+                local backup_date=$(date +%Y-%m-%d_%H:%M)
+                local destination="${destination_rsync_location}/${backup_date}"
             else
-                # Ensure the backup directory exists
-                [ "$rsync_type" = "incremental" ] && mkdir -p "${rsync_destination}"
-                # Rsync the snapshot to the local destination with link-dest
-              #  rsync -avv --delete $link_dest "${snapshot_mount_point}/" "${rsync_destination}/"
-              echo "Executing local rsync: rsync -avh --delete $link_dest \"${snapshot_mount_point}/\" \"${rsync_destination}/\""
-rsync -avh --delete $link_dest "${snapshot_mount_point}/" "${rsync_destination}/"
-
-                if [ $? -ne 0 ]; then
-                    unraid_notify "Rsync replication failed from source: ${source_path} to local destination: ${rsync_destination}" "failure"
-                    return 1
-                fi
+                local destination="${destination_rsync_location}"
             fi
-        }
-        #
-        echo "making a temporary zfs snapshot for rsync"
-        zfs snapshot "${source_path}@${snapshot_name}"
-        if [ $? -ne 0 ]; then
-            unraid_notify "Failed to create ZFS snapshot for rsync: ${source_path}@${snapshot_name}" "failure"
-            return 1
-        fi
-        #
-        local snapshot_mount_point="/mnt/${source_path}/.zfs/snapshot/${snapshot_name}"
-        do_rsync "${snapshot_mount_point}" "${destination}" ""
-        #
-        echo "deleting temporary snapshot"
-        zfs destroy "${source_path}@${snapshot_name}"
-        if [ $? -ne 0 ]; then
-            unraid_notify "Failed to delete ZFS snapshot after rsync: ${source_path}@${snapshot_name}" "failure"
-            return 1
-        fi
-        #
-        # Replication for child sub-datasets
-        local child_datasets=$(zfs list -r -H -o name "${source_path}" | tail -n +2)
-        #
-        for child_dataset in ${child_datasets}; do
-            local relative_path=$(echo "${child_dataset}" | sed "s|^${source_path}/||g")
-            echo "making a temporary zfs snapshot (child) for rsync"
-            zfs snapshot "${child_dataset}@${snapshot_name}"
-            snapshot_mount_point="/mnt/${child_dataset}/.zfs/snapshot/${snapshot_name}"
-            child_destination="${destination}/${relative_path}"
-            do_rsync "${snapshot_mount_point}" "${child_destination}" "/${relative_path}"
-            zfs destroy "${child_dataset}@${snapshot_name}"
+            #
+            do_rsync() {
+                local snapshot_mount_point="$1"
+                local rsync_destination="$2"
+                local relative_dataset_path="$3"
+                get_previous_backup
+                local link_dest_path="${destination_rsync_location}/${previous_backup}${relative_dataset_path}"
+                [ -z "$previous_backup" ] && local link_dest="" || local link_dest="--link-dest=${link_dest_path}"
+                echo "Link dest value is: $link_dest"
+                #
+                if [ "$destination_remote" = "yes" ]; then
+                    # Create the remote directory 
+                    [ "$rsync_type" = "incremental" ] && ssh "${remote_user}@${remote_server}" "mkdir -p \"${rsync_destination}\""
+                    # Rsync the snapshot to the remote destination with link-dest
+                    echo "Executing remote rsync: rsync -azvh --delete $link_dest -e ssh \"${snapshot_mount_point}/\" \"${remote_user}@${remote_server}:${rsync_destination}/\""
+                    rsync -azvh --delete $link_dest -e ssh "${snapshot_mount_point}/" "${remote_user}@${remote_server}:${rsync_destination}/"
+
+                    if [ $? -ne 0 ]; then
+                        unraid_notify "Rsync replication failed from source: ${source_path} to remote destination: ${remote_user}@${remote_server}:${rsync_destination}" "failure"
+                        continue  # Continue to the next dataset
+                    fi
+                else
+                    # Ensure the backup directory exists
+                    [ "$rsync_type" = "incremental" ] && mkdir -p "${rsync_destination}"
+                    # Rsync the snapshot to the local destination with link-dest
+                    echo "Executing local rsync: rsync -avh --delete $link_dest \"${snapshot_mount_point}/\" \"${rsync_destination}/\""
+                    rsync -avh --delete $link_dest "${snapshot_mount_point}/" "${rsync_destination}/"
+
+                    if [ $? -ne 0 ]; then
+                        unraid_notify "Rsync replication failed from source: ${source_path} to local destination: ${rsync_destination}" "failure"
+                        continue  # Continue to the next dataset
+                    fi
+                fi
+            }
+            #
+            echo "making a temporary zfs snapshot for rsync"
+            zfs snapshot "${source_path}@${snapshot_name}"
+            if [ $? -ne 0 ]; then
+                unraid_notify "Failed to create ZFS snapshot for rsync: ${source_path}@${snapshot_name}" "failure"
+                continue  # Skip to the next dataset
+            fi
+            #
+            local snapshot_mount_point="/mnt/${source_path}/.zfs/snapshot/${snapshot_name}"
+            do_rsync "${snapshot_mount_point}" "${destination}" ""
+            #
+            echo "deleting temporary snapshot"
+            zfs destroy "${source_path}@${snapshot_name}"
+            if [ $? -ne 0 ]; then
+                unraid_notify "Failed to delete ZFS snapshot after rsync: ${source_path}@${snapshot_name}" "failure"
+                continue  # Skip to the next dataset
+            fi
+            #
+            # Replication for child sub-datasets
+            local child_datasets=$(zfs list -r -H -o name "${source_path}" | tail -n +2)
+            for child_dataset in ${child_datasets}; do
+                local relative_path=$(echo "${child_dataset}" | sed "s|^${source_path}/||g")
+                echo "making a temporary zfs snapshot (child) for rsync"
+                zfs snapshot "${child_dataset}@${snapshot_name}"
+                local child_snapshot_mount_point="/mnt/${child_dataset}/.zfs/snapshot/${snapshot_name}"
+                local child_destination="${destination}/${relative_path}"
+                do_rsync "${child_snapshot_mount_point}" "${child_destination}" "/${relative_path}"
+                zfs destroy "${child_dataset}@${snapshot_name}"
+            done
         done
         #
         # Send a single success Unraid notification after all datasets (main and child) have been processed.
