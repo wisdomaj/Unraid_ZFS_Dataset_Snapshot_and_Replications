@@ -325,7 +325,7 @@ zfs_replication() {
   if [ "$replication" = "zfs" ]; then
     for source_dataset in "${valid_source_datasets[@]}"; do
       local source_path="${source_pool}/${source_dataset}"
-      local zfs_destination_path="${destination_pool}/${destination_dataset}/${source_dataset}"
+      local zfs_destination_path="$destination_pool"/"$parent_destination_dataset"/"$source_pool"_"$source_dataset"
 
       # Check if the destination location was set to remote
       if [ "$destination_remote" = "yes" ]; then
@@ -389,7 +389,7 @@ zfs_replication() {
 # Gets the most recent backup to compare against (used by below funcrions)
 get_previous_backup() {
     if [ "$rsync_type" = "incremental" ]; then
-      local destination_rsync_location="${parent_destination_folder}/${source_pool}_${source_dataset}"
+      local destination_rsync_location="$parent_destination_folder"/"$source_pool"_"$source_dataset"
         if [ "$destination_remote" = "yes" ]; then
             echo "Running: ssh ${remote_user}@${remote_server} \"ls ${destination_rsync_location} | sort -r | head -n 2 | tail -n 1\""
             previous_backup=$(ssh "${remote_user}@${remote_server}" "ls \"${destination_rsync_location}\" | sort -r | head -n 2 | tail -n 1")
@@ -406,8 +406,8 @@ rsync_replication() {
     if [ "$replication" = "rsync" ]; then
         local snapshot_name="rsync_snapshot"
         for source_dataset in "${valid_source_datasets[@]}"; do
-            local source_path="${source_pool}/${source_dataset}"
-            local destination_rsync_location="${parent_destination_folder}/${source_pool}_${source_dataset}"
+            local source_path="$source_pool"/"$source_dataset"
+            local destination_rsync_location="$parent_destination_folder"/"$source_pool"_"$source_dataset"
 
             if [ "$rsync_type" = "incremental" ]; then
                 local backup_date=$(date +%Y-%m-%d_%H:%M)
