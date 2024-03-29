@@ -18,9 +18,16 @@ notify_tune="yes"  # as well as a notifiction, if sucessful it will play the Mar
 ####################
 # Source for snapshotting and/or replication
 source_pool="source_zfs_pool_name"  #this is the zpool in which your source dataset resides (note the does NOT start with /mnt/)
-source_datasets=($(zfs list -o name -H -r -d 1 "${source_pool}" | grep "^${source_pool}/" | sed "s|^${source_pool}/||")) # backup all datasets
+all_datasets=($(zfs list -o name -H -r -d 1 "${source_pool}" | grep "^${source_pool}/" | sed "s|^${source_pool}/||")) #array of all datasets in the pool
 #source_datasets=("dataset_name")  #these are the names of the datasets you want to snapshot and/or replicate
                                 #If using auto snapshots souce pool CAN NOT contain spaces. This is because sanoid config doesnt handle them
+excluded_datasets=("backups") # List of datasets to exclude
+source_datasets=() # Initialize an empty array for source_datasets
+for dataset in "${all_datasets[@]}"; do # Iterate over all_datasets and add to source_datasets if not in excluded_datasets
+    if [[ ! " ${excluded_datasets[@]} " =~ " $dataset " ]]; then
+        source_datasets+=("$dataset")
+    fi
+done
 valid_source_datasets=() # this is the list of datasets that will be snapshotted and replicated if the pre_run_checks function validates each dataset successfully
 #
 ####################
