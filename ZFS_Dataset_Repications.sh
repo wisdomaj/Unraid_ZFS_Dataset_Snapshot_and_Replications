@@ -331,7 +331,7 @@ zfs_replication() {
       if [ "$destination_remote" = "yes" ]; then
         local destination="${remote_user}@${remote_server}:${zfs_destination_path}"
         # check if the parent destination ZFS dataset exists on the remote server. If not, create it.
-        ssh "${remote_user}@${remote_server}" "if ! zfs list -o name -H '${destination_pool}/${destination_dataset}' &>/dev/null; then zfs create '${destination_pool}/${destination_dataset}'; fi"
+        ssh "${remote_user}@${remote_server}" "if ! zfs list -o name -H '${destination_pool}/${parent_destination_dataset}' &>/dev/null; then zfs create '${destination_pool}/${parent_destination_dataset}'; fi"
         if [ $? -ne 0 ]; then
           unraid_notify "Failed to check or create ZFS dataset on remote server: ${destination}" "failure"
           continue
@@ -340,9 +340,9 @@ zfs_replication() {
         local destination="${zfs_destination_path}"
         # check if the parent destination ZFS dataset exists locally. If not, create it.
         if ! zfs list -o name -H "${destination_pool}/${destination_dataset}" &>/dev/null; then
-          zfs create "${destination_pool}/${destination_dataset}"
+          zfs create "${destination_pool}/${parent_destination_dataset}"
           if [ $? -ne 0 ]; then
-            unraid_notify "Failed to check or create local ZFS dataset: ${destination_pool}/${destination_dataset}" "failure"
+            unraid_notify "Failed to check or create local ZFS dataset: ${destination_pool}/${parent_destination_dataset}" "failure"
             continue
           fi
         fi
